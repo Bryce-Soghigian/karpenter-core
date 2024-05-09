@@ -1,69 +1,4 @@
-<!--
-**Note:** When your KEP is complete, all of these comment blocks should be removed.
-
-To get started with this template:
-
-- [x] **Pick a hosting SIG.** Sig Autoscaling
-- [ ] **Create an issue in kubernetes/enhancements**
-  When filing an enhancement tracking issue, please make sure to complete all
-  fields in that template. One of the fields asks for a link to the KEP. You
-  can leave that blank until this KEP is filed, and then go back to the
-  enhancement and add the link.
-- [ ] **Make a copy of this template directory.**
-  Copy this template into the owning SIG's directory and name it
-  `NNNN-short-descriptive-title`, where `NNNN` is the issue number (with no
-  leading-zero padding) assigned to your enhancement above.
-- [ ] **Fill out as much of the kep.yaml file as you can.**
-  At minimum, you should fill in the "Title", "Authors", "Owning-sig",
-  "Status", and date-related fields.
-- [ ] **Fill out this file as best you can.**
-  At minimum, you should fill in the "Summary" and "Motivation" sections.
-  These should be easy if you've preflighted the idea of the KEP with the
-  appropriate SIG(s).
-- [ ] **Create a PR for this KEP.**
-  Assign it to people in the SIG who are sponsoring this process.
-- [ ] **Merge early and iterate.**
-  Avoid getting hung up on specific details and instead aim to get the goals of
-  the KEP clarified and merged quickly. The best way to do this is to just
-  start with the high-level sections and fill out details incrementally in
-  subsequent PRs.
-
-Just because a KEP is merged does not mean it is complete or approved. Any KEP
-marked as `provisional` is a working document and subject to change. You can
-denote sections that are under active debate as follows:
-
-```
-<<[UNRESOLVED optional short context or usernames ]>>
-Stuff that is being argued.
-<<[/UNRESOLVED]>>
-```
-
-When editing KEPS, aim for tightly-scoped, single-topic PRs to keep discussions
-focused. If you disagree with what is already in a document, open a new PR
-with suggested changes.
-
-One KEP corresponds to one "feature" or "enhancement" for its whole lifecycle.
-You do not need a new KEP to move from beta to GA, for example. If
-new details emerge that belong in the KEP, edit the KEP. Once a feature has become
-"implemented", major changes should get new KEPs.
-
-The canonical place for the latest set of instructions (and the likely source
-of this file) is [here](/keps/NNNN-kep-template/README.md).
-
-**Note:** Any PRs to move a KEP to `implementable`, or significant changes once
-it is marked `implementable`, must be approved by each of the KEP approvers.
-If none of those approvers are still appropriate, then changes to that list
-should be approved by the remaining approvers and/or the owning SIG (or
-SIG Architecture for cross-cutting KEPs).
--->
 # AEP: Karpenter Extended Resources + DRA Integration
-
-<!--
-This is the title of your KEP. Keep it short, simple, and descriptive. A good
-title can help communicate what the KEP is and should be considered as part of
-any review.
--->
-
 <!--
 A table of contents is helpful for quickly jumping to sections of a KEP and for
 highlighting any additional information provided beyond the standard KEP
@@ -108,48 +43,6 @@ tags, and then generate with `hack/update-toc.sh`.
 - [Infrastructure Needed (Optional)](#infrastructure-needed-optional)
 <!-- /toc -->
 
-## Release Signoff Checklist
-
-<!--
-**ACTION REQUIRED:** In order to merge code into a release, there must be an
-issue in [kubernetes/enhancements] referencing this KEP and targeting a release
-milestone **before the [Enhancement Freeze](https://git.k8s.io/sig-release/releases)
-of the targeted release**.
-
-For enhancements that make changes to code or processes/procedures in core
-Kubernetes—i.e., [kubernetes/kubernetes], we require the following Release
-Signoff checklist to be completed.
-
-Check these off as they are completed for the Release Team to track. These
-checklist items _must_ be updated for the enhancement to be released.
--->
-
-Items marked with (R) are required *prior to targeting to a milestone / release*.
-
-- [ ] (R) Enhancement issue in release milestone, which links to KEP dir in [kubernetes/enhancements] (not the initial KEP PR)
-- [ ] (R) KEP approvers have approved the KEP status as `implementable`
-- [ ] (R) Design details are appropriately documented
-- [ ] (R) Test plan is in place, giving consideration to SIG Architecture and SIG Testing input (including test refactors)
-  - [ ] e2e Tests for all Beta API Operations (endpoints)
-  - [ ] (R) Ensure GA e2e tests meet requirements for [Conformance Tests](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/conformance-tests.md) 
-  - [ ] (R) Minimum Two Week Window for GA e2e tests to prove flake free
-- [ ] (R) Graduation criteria is in place
-  - [ ] (R) [all GA Endpoints](https://github.com/kubernetes/community/pull/1806) must be hit by [Conformance Tests](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/conformance-tests.md) 
-- [ ] (R) Production readiness review completed
-- [ ] (R) Production readiness review approved
-- [ ] "Implementation History" section is up-to-date for milestone
-- [ ] User-facing documentation has been created in [kubernetes/website], for publication to [kubernetes.io]
-- [ ] Supporting documentation—e.g., additional design documents, links to mailing list discussions/SIG meetings, relevant PRs/issues, release notes
-
-<!--
-**Note:** This checklist is iterative and should be reviewed and updated every time this enhancement is being considered for a milestone.
--->
-
-[kubernetes.io]: https://kubernetes.io/
-[kubernetes/enhancements]: https://git.k8s.io/enhancements
-[kubernetes/kubernetes]: https://git.k8s.io/kubernetes
-[kubernetes/website]: https://git.k8s.io/website
-
 ## Summary
 
 <!--
@@ -173,7 +66,7 @@ updates.
 
 ## Motivation
 
-Users leveraging karpenter have a variety of resource needs for extended resources. These range from gpu operator resources like timeslices all the way to hugepages, smart devices etc. Karpenter needs to support  
+Users leveraging karpenter have a variety of resource needs for extended resources. These range from gpu operator resources like timeslices all the way to hugepages, smart devices etc. Karpenter needs to support requesting compute with specific custom capacity 
 
 <!--
 This section is for explicitly listing the motivation, goals, and non-goals of
@@ -195,13 +88,11 @@ know that this has succeeded?
 - Support Dynamic Extended resources registering via things like device plugins
 - Support Per Instance Type overrides for other values karpenter supports like pricing
 ### Non-Goals
-
 <!--
 What is out of scope for this KEP? Listing non-goals helps to focus discussion
 and make progress.
 -->
 - Support for Dynamic Resource Allocation with Structured Parameters. This will be a swift followup, but as extended resources are already complex, lets start by solving for them while keeping DRA in mind. Then after we have solved extended resources, we can move onto DRA.
-
 ## Proposal
 <!--
 This is where we get down to the specifics of what the proposal actually is.
@@ -221,15 +112,14 @@ the system. The goal here is to make this feel real for users without getting
 bogged down.
 -->
 A collection of user stories will exist [here](https://docs.google.com/document/d/1vEdd226PYlGmJqs6gWlC2pTyDKhZE8DyCU2SbNB35wM/edit).
-
-#### Story 1: Hugepages(Stripe)
+#### Story 1: Hugepages (Stripe)
 As a cluster operator, I need to define custom hugepage configurations for specific instance types, so that Karpenter can accurately simulate resource availability during scheduling, allowing for the provisioning of nodes that meet specific memory and hugepage requirements.
-#### Story 2: Smarter-Devices(Peloton)
+#### Story 2: Smarter-Devices (Peloton)
 As a cluster operator, I need Karpenter to recognize and schedule nodes based on custom resource requirements (such as KVM for specific pipelines), so that nodes with the necessary hardware can be provisioned to handle specialized workloads without overloading node types.
-#### Story 3: Dynamic GPU Resources(Dataminr)
+#### Story 3: Dynamic GPU Resources (Dataminr)
  I need Karpenter to be aware of changes in node resources post-node creation due to configurations made by device plugins (like GPU time slicing), so that it can accurately schedule nodes based on the real-time capabilities of nodes after plugin configurations.
 
-#### Story 4: Spreading Network Bandwidth(Indeed)
+#### Story 4: Spreading Network Bandwidth (Indeed)
 We have some applications that leverage high rates of network bandwidth. When these applications are co-located on the same Kubernetes nodes, this can result in network exhaustion and connection failures which disrupt the health of every application on that node.
 
 We’d like to have EC2 baseline bandwidth available automatically as an extended resource on each node to allow network-sensitive applications to avoid scheduling tightly with each other through use of a network bandwidth extended resource request.
@@ -320,16 +210,23 @@ So from the requirements we have gathered up to this point, it is clear that we 
 
 ## Approach A: InstanceTypesOverrideCRD
 
-### InstanceTypeOverride CRD vs Configmap 
+### Q: Should we introduce a new InstanceTypeOverride CRD or A Configmap
+
+### Q: Should the Instance Type Override CRD be owned by cloudproviders or by core? 
+
+### Q: How should selection of instance types work?
+
+#### Requirements style api
+
 ```yaml
-type: v1alpha1.InstanceTypeOverrides
+apiVersion: karpenter.sh/v1beta1
+kind: InstanceTypeOverride
 instances:
-  requirements:
+  requirements: 
   # Group of instances we want to select
    - key: karpenter.azure.com/sku-family 
      operator: In
      values: [N] # All Nvidia SKUs on azure 
-             # Percentage or value of cost per hour 
   overrides: 
         allocatable: 
           "nvidia.com/gpu": 1
@@ -338,7 +235,8 @@ instances:
 
 
 ```yaml 
-type: v1alpha1.InstanceTypeOverrides 
+apiVersion: karpenter.sh/v1beta1
+kind: InstanceTypeOverride
 instances: 
  requirements:
 # Group of instances we want to select
@@ -350,7 +248,6 @@ overrides:
     allocatable: 
         "intel.com/special-device": 1
 ```
-#### Requirements Vs InstanceType Override 
 
  
 
@@ -377,7 +274,6 @@ to implement this enhancement.
 Based on reviewers feedback describe what additional tests need to be added prior
 implementing this enhancement to ensure the enhancements have also solid foundations.
 -->
-
 ##### Unit tests
 
 <!--
