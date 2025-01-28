@@ -50,7 +50,10 @@ type PodOptions struct {
 	PersistentVolumeClaims        []string
 	EphemeralVolumeTemplates      []EphemeralVolumeTemplateOptions
 	HostPorts                     []int32
+	HostNetwork					  bool
 	Conditions                    []v1.PodCondition
+	Containers					  []v1.Container
+	ServiceAccountName			  string
 	Phase                         v1.PodPhase
 	RestartPolicy                 v1.RestartPolicy
 	TerminationGracePeriodSeconds *int64
@@ -151,6 +154,7 @@ func Pod(overrides ...PodOptions) *v1.Pod {
 			Phase:      options.Phase,
 		},
 	}
+
 	// If PreStopSleep is enabled, add it to each of the containers.
 	// Can't use v1.LifecycleHandler == v1.SleepAction as that's a feature gate in Alpha 1.29.
 	// https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/#hook-handler-implementations

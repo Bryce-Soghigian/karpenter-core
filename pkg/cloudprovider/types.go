@@ -96,9 +96,23 @@ type InstanceType struct {
 	// Overhead is the amount of resource overhead expected to be used by kubelet and any other system daemons outside
 	// of Kubernetes.
 	Overhead *InstanceTypeOverhead
+	// ResourceSlices represents the hardware resources that will be available on the node through DRA
+	// Each ResourceSlice maps to a ResourceClass and contains the hardware resources that will be available
+	// through that class when the node is launched
+	ResourceSlices map[string]ResourceSlice
 
 	once        sync.Once
 	allocatable corev1.ResourceList
+}
+
+// ResourceSlice represents a set of hardware resources that will be available through DRA
+type ResourceSlice struct {
+	// ResourceClass is the name of the ResourceClass this slice belongs to
+	ResourceClass string
+	// Resources represents the hardware resources available in this slice
+	Resources corev1.ResourceList
+	// Attributes contains additional metadata about the resources in CEL format
+	Attributes map[string]string
 }
 
 type InstanceTypes []*InstanceType

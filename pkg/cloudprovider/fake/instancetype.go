@@ -198,6 +198,7 @@ type InstanceTypeOptions struct {
 	Architecture     string
 	OperatingSystems sets.Set[string]
 	Resources        corev1.ResourceList
+	ResourceSlices   map[string]cloudprovider.ResourceSlice
 }
 
 func PriceFromResources(resources corev1.ResourceList) float64 {

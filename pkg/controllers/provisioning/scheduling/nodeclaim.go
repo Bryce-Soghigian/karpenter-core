@@ -25,6 +25,8 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"k8s.io/klog"
+	"sigs.k8s.io/karpenter/pkg/cel"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 	"sigs.k8s.io/karpenter/pkg/utils/resources"
@@ -103,7 +105,7 @@ func (n *NodeClaim) Add(pod *v1.Pod, podRequests v1.ResourceList) error {
 	// Check instance type combinations
 	requests := resources.Merge(n.Spec.Resources.Requests, podRequests)
 
-	filtered := filterInstanceTypesByRequirements(n.InstanceTypeOptions, nodeClaimRequirements, requests)
+	filtered := filterInstanceTypes(n.InstanceTypeOptions, nodeClaimRequirements, requests, n.Pods)
 
 	if len(filtered.remaining) == 0 {
 		// log the total resources being requested (daemonset + the pod)
@@ -160,20 +162,12 @@ func InstanceTypeList(instanceTypeOptions []*cloudprovider.InstanceType) string 
 }
 
 type filterResults struct {
-	remaining cloudprovider.InstanceTypes
-	// Each of these three flags indicates if that particular criteria was met by at least one instance type
-	requirementsMet bool
-	fits            bool
-	hasOffering     bool
-
-	// requirementsAndFits indicates if a single instance type met the scheduling requirements and had enough resources
-	requirementsAndFits bool
-	// requirementsAndOffering indicates if a single instance type met the scheduling requirements and was a required offering
-	requirementsAndOffering bool
-	// fitsAndOffering indicates if a single instance type had enough resources and was a required offering
-	fitsAndOffering          bool
-	minValuesIncompatibleErr error
-	requests                 v1.ResourceList
+	remaining                  []*cloudprovider.InstanceType
+	incompatible               []*cloudprovider.InstanceType
+	insufficientResources      []*cloudprovider.InstanceType
+	insufficientResourceClaims []*cloudprovider.InstanceType
+	noOffering                 []*cloudprovider.InstanceType
+	minValuesIncompatibleErr   error
 }
 
 // FailureReason returns a presentable string explaining why all instance types were filtered out
@@ -191,31 +185,31 @@ func (r filterResults) FailureReason() string {
 
 	// no instance type met any of the three criteria, meaning each criteria was enough to completely prevent
 	// this pod from scheduling
-	if !r.requirementsMet && !r.fits && !r.hasOffering {
+	if len(r.incompatible) > 0 && len(r.insufficientResources) > 0 && len(r.noOffering) > 0 && len(r.insufficientResourceClaims) > 0 {
 		return "no instance type met the scheduling requirements or had enough resources or had a required offering"
 	}
 
 	// check the other pairwise criteria
-	if !r.requirementsMet && !r.fits {
+	if len(r.incompatible) > 0 && len(r.insufficientResources) > 0 {
 		return "no instance type met the scheduling requirements or had enough resources"
 	}
 
-	if !r.requirementsMet && !r.hasOffering {
+	if len(r.incompatible) > 0 && len(r.noOffering) > 0 {
 		return "no instance type met the scheduling requirements or had a required offering"
 	}
 
-	if !r.fits && !r.hasOffering {
+	if len(r.insufficientResources) > 0 && len(r.noOffering) > 0 {
 		return "no instance type had enough resources or had a required offering"
 	}
 
 	// and then each individual criteria. These are sort of the same as above in that each one indicates that no
 	// instance type matched that criteria at all, so it was enough to exclude all instance types.  I think it's
 	// helpful to have these separate, since we can report the multiple excluding criteria above.
-	if !r.requirementsMet {
+	if len(r.incompatible) > 0 {
 		return "no instance type met all requirements"
 	}
 
-	if !r.fits {
+	if len(r.insufficientResources) > 0 {
 		msg := "no instance type has enough resources"
 		// special case for a user typo I saw reported once
 		if r.requests.Cpu().Cmp(resource.MustParse("1M")) >= 0 {
@@ -224,19 +218,13 @@ func (r filterResults) FailureReason() string {
 		return msg
 	}
 
-	if !r.hasOffering {
+	if len(r.noOffering) > 0 {
 		return "no instance type has the required offering"
 	}
 
 	// see if any pair of criteria was enough to exclude all instances
-	if r.requirementsAndFits {
+	if len(r.insufficientResourceClaims) > 0 {
 		return "no instance type which met the scheduling requirements and had enough resources, had a required offering"
-	}
-	if r.fitsAndOffering {
-		return "no instance type which had enough resources and the required offering met the scheduling requirements"
-	}
-	if r.requirementsAndOffering {
-		return "no instance type which met the scheduling requirements and the required offering had the required resources"
 	}
 
 	// finally all instances were filtered out, but we had at least one instance that met each criteria, and met each
@@ -245,38 +233,39 @@ func (r filterResults) FailureReason() string {
 }
 
 //nolint:gocyclo
-func filterInstanceTypesByRequirements(instanceTypes []*cloudprovider.InstanceType, requirements scheduling.Requirements, requests v1.ResourceList) filterResults {
-	results := filterResults{
-		requests:        requests,
-		requirementsMet: false,
-		fits:            false,
-		hasOffering:     false,
-
-		requirementsAndFits:     false,
-		requirementsAndOffering: false,
-		fitsAndOffering:         false,
-	}
-
+func filterInstanceTypes(instanceTypes []*cloudprovider.InstanceType, requirements scheduling.Requirements, requests v1.ResourceList, pods []*v1.Pod) filterResults {
+	results := filterResults{}
 	for _, it := range instanceTypes {
-		// the tradeoff to not short circuiting on the filtering is that we can report much better error messages
-		// about why scheduling failed
 		itCompat := compatible(it, requirements)
 		itFits := fits(it, requests)
-		itHasOffering := it.Offerings.Available().HasCompatible(requirements)
+		itHasOffering := it.Offerings.HasCompatible(requirements)
+		itFitsResourceClaims := true
 
-		// track if any single instance type met a single criteria
-		results.requirementsMet = results.requirementsMet || itCompat
-		results.fits = results.fits || itFits
-		results.hasOffering = results.hasOffering || itHasOffering
+		// Check if instance type can satisfy all pod ResourceClaims
+		for _, pod := range pods {
+			if !fitsResourceClaims(it, pod) {
+				itFitsResourceClaims = false
+				break
+			}
+		}
 
-		// track if any single instance type met the three pairs of criteria
-		results.requirementsAndFits = results.requirementsAndFits || (itCompat && itFits && !itHasOffering)
-		results.requirementsAndOffering = results.requirementsAndOffering || (itCompat && itHasOffering && !itFits)
-		results.fitsAndOffering = results.fitsAndOffering || (itFits && itHasOffering && !itCompat)
+		// Track incompatibilities for error reporting
+		if !itCompat {
+			results.incompatible = append(results.incompatible, it)
+		}
+		if !itFits {
+			results.insufficientResources = append(results.insufficientResources, it)
+		}
+		if !itHasOffering {
+			results.noOffering = append(results.noOffering, it)
+		}
+		if !itFitsResourceClaims {
+			results.insufficientResourceClaims = append(results.insufficientResourceClaims, it)
+		}
 
 		// and if it met all criteria, we keep the instance type and continue filtering.  We now won't be reporting
 		// any errors.
-		if itCompat && itFits && itHasOffering {
+		if itCompat && itFits && itHasOffering && itFitsResourceClaims {
 			results.remaining = append(results.remaining, it)
 		}
 	}
@@ -298,4 +287,46 @@ func compatible(instanceType *cloudprovider.InstanceType, requirements schedulin
 
 func fits(instanceType *cloudprovider.InstanceType, requests v1.ResourceList) bool {
 	return resources.Fits(requests, instanceType.Allocatable())
+}
+
+// fitsResourceClaims checks if the instance type can satisfy all ResourceClaims
+// by evaluating the CEL expressions against the ResourceSlice attributes
+func fitsResourceClaims(instanceType *cloudprovider.InstanceType, pod *v1.Pod) bool {
+	// If pod has no ResourceClaims, it fits
+	if len(pod.Spec.ResourceClaims) == 0 {
+		return true
+	}
+
+	// If instance type has no ResourceSlices but pod has claims, it doesn't fit
+	if len(instanceType.ResourceSlices) == 0 {
+		return false
+	}
+
+	for _, claim := range pod.Spec.ResourceClaims {
+		// Find matching ResourceSlice by ResourceClass
+		slice, ok := instanceType.ResourceSlices[claim.Name]
+		if !ok {
+			return false
+		}
+
+		// Evaluate CEL expression from claim against slice attributes
+		matches, err := cel.EvaluateResourceClaimSelector(claim.Spec.AllocationMode, slice.Attributes)
+		if err != nil {
+			// Log error but treat as non-matching for safety
+			klog.ErrorS(err, "Failed to evaluate CEL expression",
+				"pod", klog.KObj(pod),
+				"claim", claim.Name,
+				"instanceType", instanceType.Name)
+			return false
+		}
+		if !matches {
+			return false
+		}
+
+		// Check if resources are available
+		if !resources.Fits(claim.Spec.Resources.Requests, slice.Resources) {
+			return false
+		}
+	}
+	return true
 }

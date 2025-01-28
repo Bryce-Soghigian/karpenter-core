@@ -26,6 +26,7 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/multierr"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/klog/v2"
@@ -194,7 +195,7 @@ func (r Results) TruncateInstanceTypes(maxInstanceTypes int) Results {
 			// Check if the truncated InstanceTypeOptions in each NewNodeClaim from the results still satisfy the minimum requirements
 			// If number of InstanceTypes in the NodeClaim cannot satisfy the minimum requirements, add its Pods to error map with reason.
 			for _, pod := range newNodeClaim.Pods {
-				r.PodErrors[pod] = fmt.Errorf("pod didn’t schedule because NodePool %q couldn’t meet minValues requirements, %w", newNodeClaim.NodeClaimTemplate.NodePoolName, err)
+				r.PodErrors[pod] = fmt.Errorf("pod didn't schedule because NodePool %q couldn't meet minValues requirements, %w", newNodeClaim.NodeClaimTemplate.NodePoolName, err)
 			}
 		} else {
 			validNewNodeClaims = append(validNewNodeClaims, newNodeClaim)
@@ -421,4 +422,165 @@ func filterByRemainingResources(instanceTypes []*cloudprovider.InstanceType, rem
 		}
 	}
 	return filtered
+}
+
+type NodeClaim struct {
+	NodeClaimTemplate   *v1.NodeClaim
+	Pods                []*corev1.Pod
+	Requirements        scheduling.Requirements
+	InstanceTypeOptions []*cloudprovider.InstanceType
+	// Track allocated ResourceClaims to ensure we don't over-allocate
+	AllocatedResourceClaims map[string]map[string]corev1.ResourceList
+}
+
+func NewNodeClaim(nodePool *v1.NodePool, instanceTypes []*cloudprovider.InstanceType) *NodeClaim {
+	return &NodeClaim{
+		NodeClaimTemplate: &v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: fmt.Sprintf("%s-", nodePool.Name),
+				Labels:       nodePool.Spec.Template.Labels,
+			},
+			Spec: nodePool.Spec.Template.Spec,
+		},
+		InstanceTypeOptions:     instanceTypes,
+		Requirements:            scheduling.NewNodeSelectorRequirementsWithMinValues(nodePool.Spec.Template.Spec.Requirements...),
+		AllocatedResourceClaims: make(map[string]map[string]corev1.ResourceList),
+	}
+}
+
+// CanAllocateResourceClaim checks if a ResourceClaim can be allocated to a pod
+func (n *NodeClaim) CanAllocateResourceClaim(pod *corev1.Pod, claim corev1.PodResourceClaim, instanceType *cloudprovider.InstanceType) bool {
+	slice, ok := instanceType.ResourceSlices[claim.Name]
+	if !ok {
+		return false
+	}
+
+	// Check if we've already allocated from this slice
+	allocated, ok := n.AllocatedResourceClaims[instanceType.Name][claim.Name]
+	if !ok {
+		return true
+	}
+
+	// Check if there are enough resources remaining
+	remaining := resources.Subtract(slice.Resources, allocated)
+	return resources.Fits(claim.Resources.Requests, remaining)
+}
+
+// AllocateResourceClaim marks a ResourceClaim as allocated
+func (n *NodeClaim) AllocateResourceClaim(pod *corev1.Pod, claim corev1.PodResourceClaim, instanceType *cloudprovider.InstanceType) {
+	if _, ok := n.AllocatedResourceClaims[instanceType.Name]; !ok {
+		n.AllocatedResourceClaims[instanceType.Name] = make(map[string]corev1.ResourceList)
+	}
+
+	if _, ok := n.AllocatedResourceClaims[instanceType.Name][claim.Name]; !ok {
+		n.AllocatedResourceClaims[instanceType.Name][claim.Name] = corev1.ResourceList{}
+	}
+
+	n.AllocatedResourceClaims[instanceType.Name][claim.Name] = resources.Merge(
+		n.AllocatedResourceClaims[instanceType.Name][claim.Name],
+		claim.Resources.Requests,
+	)
+}
+
+// DeallocateResourceClaim removes a ResourceClaim allocation
+func (n *NodeClaim) DeallocateResourceClaim(pod *corev1.Pod, claim corev1.PodResourceClaim, instanceType *cloudprovider.InstanceType) {
+	if _, ok := n.AllocatedResourceClaims[instanceType.Name]; !ok {
+		return
+	}
+	if _, ok := n.AllocatedResourceClaims[instanceType.Name][claim.Name]; !ok {
+		return
+	}
+	n.AllocatedResourceClaims[instanceType.Name][claim.Name] = resources.Subtract(
+		n.AllocatedResourceClaims[instanceType.Name][claim.Name],
+		claim.Resources.Requests,
+	)
+}
+
+func (s *Scheduler) Schedule(ctx context.Context, pod *corev1.Pod) (Results, error) {
+	// Get all NodePools that could potentially schedule this pod
+	nodePools, err := s.state.GetNodePools(ctx)
+	if err != nil {
+		return Results{}, fmt.Errorf("getting nodepools, %w", err)
+	}
+
+	var errs error
+	results := Results{
+		PodErrors: map[*corev1.Pod]error{},
+	}
+
+	// Try scheduling against each NodePool
+	for _, nodePool := range nodePools {
+		instanceTypes, err := s.cloudProvider.GetInstanceTypes(ctx, nodePool)
+		if err != nil {
+			errs = multierr.Append(errs, fmt.Errorf("getting instance types for nodepool %s, %w", nodePool.Name, err))
+			continue
+		}
+
+		nodeClaim := NewNodeClaim(nodePool, instanceTypes)
+
+		// Try to schedule the pod on this NodeClaim
+		if err := s.trySchedulePod(ctx, pod, nodeClaim); err != nil {
+			results.PodErrors[pod] = err
+			continue
+		}
+
+		// Pod scheduled successfully
+		results.NewNodeClaims = append(results.NewNodeClaims, nodeClaim)
+		break
+	}
+
+	if len(results.NewNodeClaims) == 0 {
+		return results, fmt.Errorf("failed to schedule pod: %v", errs)
+	}
+
+	return results, nil
+}
+
+func (s *Scheduler) trySchedulePod(ctx context.Context, pod *corev1.Pod, nodeClaim *NodeClaim) error {
+	// Check if pod fits basic requirements and resources
+	if err := s.podFitsNodeClaim(ctx, pod, nodeClaim); err != nil {
+		return err
+	}
+
+	// Check and allocate ResourceClaims
+	for _, claim := range pod.Spec.ResourceClaims {
+		// Try each instance type until we find one that can accommodate the claim
+		allocated := false
+		for _, it := range nodeClaim.InstanceTypeOptions {
+			if nodeClaim.CanAllocateResourceClaim(pod, claim, it) {
+				nodeClaim.AllocateResourceClaim(pod, claim, it)
+				allocated = true
+				break
+			}
+		}
+		if !allocated {
+			// Deallocate any claims we've already allocated for this pod
+			for _, prevClaim := range pod.Spec.ResourceClaims {
+				for _, it := range nodeClaim.InstanceTypeOptions {
+					nodeClaim.DeallocateResourceClaim(pod, prevClaim, it)
+				}
+			}
+			return fmt.Errorf("could not allocate ResourceClaim %s", claim.Name)
+		}
+	}
+
+	// Pod fits and all claims allocated successfully
+	nodeClaim.Pods = append(nodeClaim.Pods, pod)
+	return nil
+}
+
+func (s *Scheduler) podFitsNodeClaim(ctx context.Context, pod *corev1.Pod, nodeClaim *NodeClaim) error {
+	// Check if pod fits node selector requirements
+	if err := scheduling.NewPodRequirements(pod).Compatible(nodeClaim.Requirements); err != nil {
+		return fmt.Errorf("pod does not fit node requirements: %w", err)
+	}
+
+	// Check if pod resources fit
+	podRequests := scheduling.NewPodRequests(pod)
+	for _, it := range nodeClaim.InstanceTypeOptions {
+		if resources.Fits(podRequests, it.Allocatable()) {
+			return nil
+		}
+	}
+	return fmt.Errorf("pod resources do not fit any instance type")
 }

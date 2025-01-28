@@ -217,11 +217,38 @@ func (c *CloudProvider) GetInstanceTypes(_ context.Context, np *v1.NodePool) ([]
 			Name: "gpu-vendor-instance-type",
 			Resources: map[corev1.ResourceName]resource.Quantity{
 				ResourceGPUVendorA: resource.MustParse("2"),
-			}}),
+			},
+			ResourceSlices: map[string]cloudprovider.ResourceSlice{
+				"gpu-vendor-a": {
+					ResourceClass: "gpu-vendor-a",
+					Resources: corev1.ResourceList{
+						ResourceGPUVendorA: resource.MustParse("2"),
+					},
+					Attributes: map[string]string{
+						"vendor": "vendor-a",
+						"model":  "t4",
+						"memory": "16Gi",
+					},
+				},
+			},
+		}),
 		NewInstanceType(InstanceTypeOptions{
 			Name: "gpu-vendor-b-instance-type",
 			Resources: map[corev1.ResourceName]resource.Quantity{
 				ResourceGPUVendorB: resource.MustParse("2"),
+			},
+			ResourceSlices: map[string]cloudprovider.ResourceSlice{
+				"gpu-vendor-b": {
+					ResourceClass: "gpu-vendor-b",
+					Resources: corev1.ResourceList{
+						ResourceGPUVendorB: resource.MustParse("2"),
+					},
+					Attributes: map[string]string{
+						"vendor": "vendor-b",
+						"model":  "a100",
+						"memory": "80Gi",
+					},
+				},
 			},
 		}),
 		NewInstanceType(InstanceTypeOptions{
